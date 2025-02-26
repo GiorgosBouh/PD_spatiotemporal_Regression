@@ -1,0 +1,96 @@
+import os
+import pandas as pd
+import numpy as np
+from sklearn.model_selection import train_test_split
+from sklearn.preprocessing import StandardScaler
+from sklearn.ensemble import RandomForestRegressor
+from sklearn.metrics import mean_absolute_error, mean_squared_error, r2_score
+
+# Define file paths
+gait_data_path = "/Users/user/Desktop/Aegean_Uni_Master/Gait prediction with LLMs/Data/spatiotemporal_3"
+fog_score_file = "/Users/user/Desktop/Aegean_Uni_Master/Gait prediction with LLMs/Data/PDGinfo3.csv"
+
+# Load FoG score data
+fog_df = pd.read_csv(fog_score_file, delimiter=";", decimal=",", dtype={"ID": str})  # Ensure ID is a string
+fog_df.rename(columns={fog_df.columns[0]: "ID"}, inplace=True)  # Ensure first column is named "ID"
+
+# Initialize an empty DataFrame for all gait cycles
+all_gait_data = []
+
+# Read all gait cycle files
+for file_name in os.listdir(gait_data_path):
+    if "spatiotemporal" in file_name:
+        file_path = os.path.join(gait_data_path, file_name)
+        subject_id = file_name.split("_")[0][3:]  # Extract numerical ID from file name (SUB10 -> 10)
+        medication_state = file_name.split("_")[1]  # Extract 'on' or 'off' medication state
+
+        # Load gait cycle data
+        df = pd.read_csv(file_path, delimiter=";", decimal=".")
+        df["ID"] = str(int(subject_id))  # Convert to string for consistent merging
+        df["Medication"] = medication_state  # Assign medication state
+
+        all_gait_data.append(df)
+
+# Combine all gait cycle data into one DataFrame
+gait_df = pd.concat(all_gait_data, ignore_index=True)
+
+# Ensure both ID columns are strings for merging
+gait_df["ID"] = gait_df["ID"].astype(str)
+fog_df["ID"] = fog_df["ID"].astype(str)
+
+# Merge with FoG score data
+merged_df = gait_df.merge(fog_df[["ID", "FoG-Q (score)"]], on="ID", how="left")
+
+# Handle missing values (remove rows where FoG-Q is missing)
+merged_df = merged_df.dropna(subset=["FoG-Q (score)"])
+
+# Convert categorical medication state to numerical (0=off, 1=on)
+merged_df["Medication"] = merged_df["Medication"].map({"off": 0, "on": 1})
+
+# Get the list of all spatiotemporal variables used
+spatiotemporal_variables = [col for col in merged_df.columns if col not in ["ID", "FoG-Q (score)", "Medication"]]
+
+# Separate ON and OFF medication data
+df_on = merged_df[merged_df["Medication"] == 1].copy()
+df_off = merged_df[merged_df["Medication"] == 0].copy()
+
+
+# Function to train and evaluate a model
+def train_model(df, condition):
+    X = df.drop(columns=["ID", "FoG-Q (score)", "Medication"])  # Features
+    y = df["FoG-Q (score)"]  # Target variable
+
+    # Standardize numerical features
+    scaler = StandardScaler()
+    X_scaled = scaler.fit_transform(X)
+
+    # Split into training and testing sets
+    X_train, X_test, y_train, y_test = train_test_split(X_scaled, y, test_size=0.2, random_state=42)
+
+    # Train a Random Forest Regressor
+    model = RandomForestRegressor(n_estimators=100, random_state=42)
+    model.fit(X_train, y_train)
+
+    # Make predictions
+    y_pred = model.predict(X_test)
+
+    # Evaluate the model
+    mae = mean_absolute_error(y_test, y_pred)
+    mse = mean_squared_error(y_test, y_pred)
+    r2 = r2_score(y_test, y_pred)
+
+    print(f"Results for {condition} Medication:")
+    print(f"  - Mean Absolute Error: {mae:.2f}")
+    print(f"  - Mean Squared Error: {mse:.2f}")
+    print(f"  - R² Score: {r2:.2f}")
+    print("-" * 50)
+
+
+# Train and evaluate the model separately for ON and OFF conditions
+train_model(df_on, "ON")
+train_model(df_off, "OFF")
+
+# Print list of spatiotemporal variables
+print("Spatiotemporal Variables Used:")
+for var in spatiotemporal_variables:
+    print(f"  - {var}")
