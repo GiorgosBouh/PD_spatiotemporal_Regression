@@ -1,0 +1,112 @@
+import os
+import pandas as pd
+import scipy.stats as stats
+
+# Define file paths
+gait_data_path = "/Users/user/Desktop/Aegean_Uni_Master/Gait prediction with LLMs/Data/Spatiotemporal_3"
+fog_score_file = "/Users/user/Desktop/Aegean_Uni_Master/Gait prediction with LLMs/Data/PDGinfo3.csv"
+
+# Load FoG score data
+fog_df = pd.read_csv(fog_score_file, delimiter=";", decimal=".", dtype={"ID": str})
+fog_df.rename(columns={fog_df.columns[0]: "ID"}, inplace=True)
+
+# Initialize an empty list to store all gait cycle data
+all_gait_data = []
+
+# Read all gait cycle files
+for file_name in os.listdir(gait_data_path):
+    if "spatiotemporal" in file_name:
+        file_path = os.path.join(gait_data_path, file_name)
+        subject_id = file_name.split("_")[0][3:]
+        medication_state = file_name.split("_")[1]
+
+        # Load gait cycle data with correct decimal separator
+        df = pd.read_csv(file_path, delimiter=";", decimal=".")
+
+        # Convert all columns to numeric, forcing errors to NaN
+        df = df.apply(pd.to_numeric, errors="coerce")
+
+        # Add subject ID and medication state
+        df["ID"] = str(int(subject_id))
+        df["Medication"] = medication_state
+
+        all_gait_data.append(df)
+
+# Combine all gait cycle data into one DataFrame
+gait_df = pd.concat(all_gait_data, ignore_index=True)
+
+# Ensure ID columns are strings for merging
+gait_df["ID"] = gait_df["ID"].astype(str)
+fog_df["ID"] = fog_df["ID"].astype(str)
+
+# Merge with FoG score data
+merged_df = gait_df.merge(fog_df[["ID", "FoG-Q (score)"]], on="ID", how="left")
+
+# Drop rows where FoG-Q score is missing
+merged_df = merged_df.dropna(subset=["FoG-Q (score)"])
+
+# Convert medication state to numerical (0=off, 1=on)
+merged_df["Medication"] = merged_df["Medication"].map({"off": 0, "on": 1})
+
+# Identify spatiotemporal variables (excluding ID, FoG score, Medication)
+spatiotemporal_variables = [col for col in merged_df.columns if col not in ["ID", "FoG-Q (score)", "Medication"]]
+
+# Convert spatiotemporal variables to numeric and handle errors
+for var in spatiotemporal_variables:
+    merged_df[var] = pd.to_numeric(merged_df[var], errors="coerce")
+
+# Separate ON and OFF medication data
+df_on = merged_df[merged_df["Medication"] == 1].copy()
+df_off = merged_df[merged_df["Medication"] == 0].copy()
+
+# Perform statistical tests and compute descriptive statistics
+results = []
+
+for var in spatiotemporal_variables:
+    # Check if both groups have enough valid numerical data
+    if df_on[var].dropna().empty or df_off[var].dropna().empty:
+        print(f"⚠️ Skipping {var} due to insufficient valid numerical data.")
+        continue
+
+    # Compute t-test statistics
+    t_stat, p_val = stats.ttest_ind(df_on[var].dropna(), df_off[var].dropna(), equal_var=False)
+    p_val = float(f"{p_val:.20f}")  # Convert to high-precision real number
+
+    # Compute means and standard deviations
+    on_mean = df_on[var].mean()
+    on_std = df_on[var].std()
+    off_mean = df_off[var].mean()
+    off_std = df_off[var].std()
+
+    # Compute sample sizes
+    n_on = df_on[var].count()
+    n_off = df_off[var].count()
+
+    results.append({
+        "Variable": var,
+        "ON_N": n_on,
+        "ON_Mean": round(on_mean, 4),
+        "ON_Std": round(on_std, 4),
+        "OFF_N": n_off,
+        "OFF_Mean": round(off_mean, 4),
+        "OFF_Std": round(off_std, 4),
+        "t-value": round(t_stat, 4),
+        "p-value": p_val
+    })
+
+# Convert results to DataFrame
+results_df = pd.DataFrame(results)
+
+# Define output folder and filename
+output_folder = "/Users/user/Documents/paper_Parkinson's Disease Diagnosis, Treatment, and Management/new_results_16_2_25"
+output_file = "descriptive_statistics_p_values.csv"
+output_path = os.path.join(output_folder, output_file)
+
+# Ensure the directory exists
+os.makedirs(output_folder, exist_ok=True)
+
+# Save the results
+results_df.to_csv(output_path, index=False)
+
+# Print confirmation message
+print(f"✅ File successfully saved at: {output_path}")
